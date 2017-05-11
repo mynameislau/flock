@@ -5,7 +5,7 @@ module.exports = {
   output: {
     path: path.resolve(__dirname),
     filename: 'bundle.js',
-    publicPath: '/assets/',
+    publicPath: '/assets/'
   },
   // module: {
   //   rules: [{
@@ -31,9 +31,10 @@ module.exports = {
   // },
   resolve: {
     modules: ['node_modules', path.resolve(__dirname)],
-    extensions: ['.js'],
+    extensions: ['.js']
   },
   devtool: 'sourcemap',
   context: __dirname,
-  target: 'web',
+  externals: ['THREE'],
+  target: 'web'
 };

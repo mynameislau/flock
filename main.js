@@ -1,225 +1,198 @@
-import R from 'ramda';
+// import THREE from 'THREE';
 
-import {
-  distance,
-  distanceVec2,
-  averageVec2List,
-  vec2InterpolateTo,
-  vec2Divide1,
-  vec2Multiply1,
-  vec2Add1,
-  vec2Subtract1,
-  vec2MaxVec2,
-  vec2MinVec2,
-  vec2AddVec2,
-  vec2Magnitude
-} from './vec2-utils';
+import flockSim from './cannon-flock';
 
-import { trace, debug, average, rand } from './utils';
+const agentsLength = flockSim.agents.length;
 
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const width = canvas.width;
-const height = canvas.height;
+// store.dispatch({ type: 'tick' });
 
-const flockRadius = 100;
-const agentsNumber = 40;
-const personalSpaceRadius = 10;
-const spawnRadius = 100;
-const cohesionWeight = 0.00005;
-const alignmentWeight = 0.04;
-const frequency = 1 / 60 * 1000;
-const maxForce = 1.2;
-const initVelocity = 0.1;
-const friction = 0.98;
-const baseMovementSpeed = 0.05;
-const randomSteering = 0;
-const separationWeight = 0.05;
+if (WEBVR.isAvailable() === false) {
+  // document.body.appendChild(WEBVR.getMessage());
+}
+//
+var clock = new THREE.Clock();
+var container;
+var camera, scene, raycaster, renderer;
+var effect, controls;
+var room;
+var isMouseDown = false;
+var INTERSECTED;
+var crosshair;
 
-const createAgent = id => ({
-  // orientation: rand(-Math.PI, Math.PI),
-  id,
-  velocity: [
-    rand(-initVelocity, initVelocity),
-    rand(-initVelocity, initVelocity)
-  ],
-  coords: [
-    width / 2 + rand(-spawnRadius, spawnRadius),
-    height / 2 + rand(-spawnRadius, spawnRadius)
-  ]
-});
+init();
+animate();
+function init () {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  var info = document.createElement('div');
 
-let state = {
-  agents: R.times(createAgent, agentsNumber)
-};
+  info.style.position = 'absolute';
+  info.style.top = '10px';
+  info.style.width = '100%';
+  info.style.textAlign = 'center';
+  container.appendChild(info);
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(
+    75,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    100
+  );
+  camera.position.z = 5;
+  scene.add(camera);
+  crosshair = new THREE.Mesh(
+    new THREE.RingGeometry(0.02, 0.04, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      opacity: 0.5,
+      transparent: true
+    })
+  );
+  crosshair.position.z = -2;
+  camera.add(crosshair);
+  room = new THREE.Mesh(
+    new THREE.BoxGeometry(6, 6, 6, 8, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0x404040, wireframe: true })
+  );
+  scene.add(room);
+  scene.add(new THREE.HemisphereLight(0x606060, 0x404040));
+  var light = new THREE.DirectionalLight(0xffffff);
 
-const getAgents = () => state.agents;
+  light.position.set(1, 1, 1).normalize();
+  scene.add(light);
+  var geometry = new THREE.ConeGeometry(0.05, 0.10);
 
-// const infinitePos = (min, max, val) =>
-//   val > max ? max : val < min ? min : val;
-
-const agentsReducer = (prevState, action) => {
-  switch (action.type) {
-
-  case 'applyForces':
-    return R.assoc(
-        'agents',
-        prevState.agents.map(
-          R.compose(
-            agent =>
-              R.assoc(
-                'coords',
-                vec2AddVec2(agent.coords, agent.velocity),
-                agent
-              ),
-            agent => R.assoc('velocity', sumForces(agent), agent)
-          )
-        ),
-        prevState
-      );
-  default:
-    return prevState;
-
-  }
-};
-
-const neighbours = R.curry((radius, agentsList, agent) =>
-  R.filter(
-    curr =>
-      curr.id !== agent.id && distance(curr.coords, agent.coords) < radius,
-    agentsList
-  )
-);
-
-const agentToCoords = agent => agent.coords;
-
-const agentToVelocity = agent => agent.velocity;
-
-const agentsToCoordsList = agents => agents.map(agentToCoords);
-
-const agentsToVelocityList = agents => agents.map(agentToVelocity);
-
-const averageNeighboursPosition = R.compose(
-  averageVec2List,
-  agentsToCoordsList,
-  agent => neighbours(flockRadius, getAgents(), agent).concat([agent])
-);
-
-const averageNeighboursVelocity = R.compose(
-  averageVec2List,
-  agentsToVelocityList,
-  agent => neighbours(flockRadius, getAgents(), agent).concat([agent])
-);
-
-const cohesion = agent =>
-  R.compose(
-    vec2Multiply1(cohesionWeight),
-    // trace,
-    distanceVec2(agent.coords),
-    averageNeighboursPosition
-  )(agent);
-
-const alignment = R.compose(
-  vec2Multiply1(alignmentWeight),
-  averageNeighboursVelocity
-);
-
-const separation = agent =>
-  R.compose(
-    vec2Multiply1(separationWeight),
-    // vec2MaxVec2([-2, -2]),
-    // vec2MinVec2([2, 2]),
-    vec2Limit(1),
-    R.reduce(vec2AddVec2, [0, 0]),
-    R.map(([x, y]) => [1 / x, 1 / y]),
-    //R.map(R.flip(vec2Divide1)(1)), // 1/30 -> 0.00001
-    R.map(vec2Add1(0.00001)),
-    // debug,
-    R.map(distanceVec2(agent.coords)),
-    // debug,
-    // trace,
-    agentsToCoordsList,
-    neighbours(personalSpaceRadius, getAgents())
-  )(agent);
-
-const applyFriction = vec2Multiply1(friction);
-
-const vec2Limit = force => R.compose(
-  vec2 => {
-    //console.log('entree', vec2);
-    const absMagnitude = Math.abs(vec2Magnitude(vec2));
-    const ratio = Math.max(1, absMagnitude / force)
-    //console.log(absMagnitude, maxForce, ratio);
-    const result = vec2Divide1(ratio, vec2);
-    //console.log('result', result);
-    return result;
-  }
-  //vec2 => vec2Subtract1(Math.max(0, vec2[0] + vec2[1] - 3) / 2, vec2),
-  //vec2 => vec2Subtract1(Math.min(0, (vec2[0] + vec2[1]) / 2, vec2)
-);
-
-const baseAcceleration = ovec =>
-  R.compose(
-    // trace,
-    vec2 => vec2AddVec2([
-      rand(-randomSteering, randomSteering),
-      rand(-randomSteering, randomSteering)
-    ], vec2),
-    //vec2Multiply1(1 + Math.random() * baseMovementSpeed)
-    vec2Multiply1(1 + baseMovementSpeed)
-  )(ovec);
-
-const sumForces = agent =>
-  R.compose(
-    applyFriction,
-    //trace,
-    vec2Limit(maxForce),
-    // () => [-300, -300],
-    //trace,
-    vec2AddVec2(alignment(agent)),
-    vec2AddVec2(cohesion(agent)),
-    vec2AddVec2(separation(agent)),
-    baseAcceleration,
-    R.prop('velocity')
-  )(agent);
-
-window.setInterval(() => {
-  // state = incrementAgents();
-  state = agentsReducer(state, {
-    type: 'applyForces'
-  });
-}, frequency);
-
-const render = () => {
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = 'black';
-  ctx.fillRect(0, 0, width, height);
-
-  state.agents.forEach(({ coords, velocity }) => {
-    const [x, y] = coords;
-    const [vx, vy] = velocity;
-    const angle = Math.atan2(vy, vx);
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-
-    ctx.fillStyle = 'white';
-    ctx.strokeStyle = 'white';
-    ctx.beginPath();
-    ctx.lineTo(x, y);
-    ctx.lineTo(
-      x + Math.cos(angle - Math.PI / 2) * 3,
-      y + Math.sin(angle - Math.PI / 2) * 3
+  flockSim.agents.forEach(agent => {
+    var object = new THREE.Mesh(
+      geometry,
+      new THREE.MeshLambertMaterial({ color: Math.random() * 0xffffff })
     );
-    ctx.lineTo(x + cos * 10, y + sin * 10);
-    ctx.lineTo(
-      x + Math.cos(angle + Math.PI / 2) * 3,
-      y + Math.sin(angle + Math.PI / 2) * 3
-    );
-    // ctx.fill();
-    ctx.stroke();
+
+    object.position.x = agent.body.position.x;
+    object.position.y = agent.body.position.y;
+    object.position.z = agent.body.position.z;
+    object.userData.body = agent.body;
+
+    room.add(object);
   });
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setClearColor(0x505050);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.sortObjects = false;
+  container.appendChild(renderer.domElement);
+  // controls = new THREE.VRControls(camera);
+  effect = new THREE.VREffect(renderer);
+  WEBVR.getVRDisplay(display => {
+    document.body.appendChild(WEBVR.getButton(display, renderer.domElement));
+  });
+  renderer.domElement.addEventListener('mousedown', onMouseDown, false);
+  renderer.domElement.addEventListener('mouseup', onMouseUp, false);
+  renderer.domElement.addEventListener('touchstart', onMouseDown, false);
+  renderer.domElement.addEventListener('touchend', onMouseUp, false);
+  //
+  window.addEventListener('resize', onWindowResize, false);
 
-  requestAnimationFrame(render);
-};
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+}
+function onMouseDown () {
+  isMouseDown = true;
+}
+function onMouseUp () {
+  isMouseDown = false;
+}
+function onWindowResize () {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  effect.setSize(window.innerWidth, window.innerHeight);
+}
+//
+function animate () {
+  effect.requestAnimationFrame(animate);
+  render();
+}
 
-requestAnimationFrame(render);
+var lastTime;
+
+(function simloop (time) {
+  requestAnimationFrame(simloop);
+  if (lastTime !== undefined) {
+    var dt = (time - lastTime) / 1000;
+
+    flockSim.step(dt);
+  }
+  lastTime = time;
+
+  render();
+}());
+
+function render () {
+  var delta = clock.getDelta() * 60;
+
+  // if (isMouseDown === true) {
+  //   var cube = room.children[0];
+  //
+  //   room.remove(cube);
+  //   cube.position.set(0, 0, -0.75);
+  //   cube.position.applyQuaternion(camera.quaternion);
+  //   cube.userData.velocity.x = (Math.random() - 0.5) * 0.02 * delta;
+  //   cube.userData.velocity.y = (Math.random() - 0.5) * 0.02 * delta;
+  //   cube.userData.velocity.z = (Math.random() * 0.01 - 0.05) * delta;
+  //   cube.userData.velocity.applyQuaternion(camera.quaternion);
+  //   room.add(cube);
+  // }
+
+  // // Keep cubes inside room
+  for (var i = 0; i < room.children.length; i++) {
+    var object = room.children[i];
+
+    object.position.x = object.userData.body.position.x;
+    object.position.y = object.userData.body.position.y;
+    object.position.z = object.userData.body.position.z;
+    // object.quaternion.x = object.userData.body.quaternion.x;
+    // object.quaternion.y = object.userData.body.quaternion.y;
+    // object.quaternion.z = object.userData.body.quaternion.z;
+    // object.quaternion.w = object.userData.body.quaternion.w;
+
+    const rotaZ = Math.atan2(
+      object.userData.body.velocity.x,
+      object.userData.body.velocity.z
+    );
+    const rotaX = Math.atan2(
+      object.userData.body.velocity.z,
+      object.userData.body.velocity.y
+    );
+    const rotaY = Math.atan2(
+      object.userData.body.velocity.z,
+      object.userData.body.velocity.y
+    );
+
+    // object.rotation.x = rotaY;
+    // object.rotation.y = rotaX;
+    object.rotation.z = rotaZ + Math.PI / 2;
+    object.rotation.x = rotaX -Math.PI / 2;
+    object.rotation.y =  Math.PI;
+
+    // cube.userData.velocity.multiplyScalar(1 - 0.001 * delta);
+    // cube.position.add(cube.userData.velocity);
+    // if (cube.position.x < -3 || cube.position.x > 3) {
+    //   cube.position.x = THREE.Math.clamp(cube.position.x, -3, 3);
+    //   cube.userData.velocity.x = -cube.userData.velocity.x;
+    // }
+    // if (cube.position.y < -3 || cube.position.y > 3) {
+    //   cube.position.y = THREE.Math.clamp(cube.position.y, -3, 3);
+    //   cube.userData.velocity.y = -cube.userData.velocity.y;
+    // }
+    // if (cube.position.z < -3 || cube.position.z > 3) {
+    //   cube.position.z = THREE.Math.clamp(cube.position.z, -3, 3);
+    //   cube.userData.velocity.z = -cube.userData.velocity.z;
+    // }
+    // cube.rotation.x += cube.userData.velocity.x * 2 * delta;
+    // cube.rotation.y += cube.userData.velocity.y * 2 * delta;
+    // cube.rotation.z += cube.userData.velocity.z * 2 * delta;
+  }
+  controls.update();
+
+  renderer.render(scene, camera);
+  // effect.render(scene, camera);
+}
